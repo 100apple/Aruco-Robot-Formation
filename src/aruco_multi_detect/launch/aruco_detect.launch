@@ -1,0 +1,23 @@
+<launch>
+    <!-- 可选择使用usb_cam或直接捕获 -->
+    <arg name="use_camera_topic" default="false" />
+    
+    <!-- 当use_camera_topic为true时启动usb_cam -->
+    <group if="$(arg use_camera_topic)">
+        <node name="usb_cam" pkg="usb_cam" type="usb_cam_node" output="screen">
+            <param name="video_device" value="/dev/video5" />
+            <param name="image_width" value="1920" />
+            <param name="image_height" value="1080" />
+            <param name="pixel_format" value="mjpeg" /> <!-- 改为mjpeg格式 -->
+            <param name="camera_frame_id" value="usb_cam" />
+            <param name="io_method" value="mmap" />
+            <remap from="/usb_cam/image_raw" to="/camera/image_raw" />
+        </node>
+    </group>
+
+    <!-- 启动ArUco检测节点 -->
+    <node name="aruco_detector" pkg="aruco_multi_detect" type="aruco_multi_detector" output="screen">
+        <param name="show_window" value="true" />
+        <param name="use_camera_topic" value="$(arg use_camera_topic)" />
+    </node>
+</launch>

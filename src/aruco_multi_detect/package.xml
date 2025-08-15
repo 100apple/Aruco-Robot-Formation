@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>aruco_multi_detect</name>
+  <version>0.1.0</version>
+  <description>
+    ROS package for detecting multiple ArUco markers and publishing their positions.
+  </description>
+
+  <maintainer email="your.email@example.com">Your Name</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- 构建依赖 -->
+  <build_depend>roscpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>image_transport</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>message_generation</build_depend>
+  <build_depend>message_runtime</build_depend>
+  <build_depend>libopencv-dev</build_depend>
+  <build_depend>libeigen3-dev</build_depend>
+  <build_depend>message_generation</build_depend>
+  <build_depend>message_runtime</build_depend>
+  <build_depend>message_filters</build_depend>
+  <build_depend>libopencv-dev</build_depend>
+  <build_depend>libeigen3-dev</build_depend>
+  <build_depend>libmysqlcppconn-dev</build_depend>
+  <build_depend>qtbase5-dev</build_depend>
+
+  <build_export_depend>roscpp</build_export_depend>
+  <build_export_depend>std_msgs</build_export_depend>
+  <build_export_depend>geometry_msgs</build_export_depend>
+  <build_export_depend>sensor_msgs</build_export_depend>
+  <build_export_depend>image_transport</build_export_depend>
+  <build_export_depend>cv_bridge</build_export_depend>
+  <build_export_depend>libopencv-dev</build_export_depend>
+  <build_export_depend>libeigen3-dev</build_export_depend>
+  <build_export_depend>libmysqlcppconn-dev</build_export_depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>libopencv-dev</exec_depend>
+  <exec_depend>libeigen3-dev</exec_depend>
+  <exec_depend>libmysqlcppconn-dev</exec_depend>
+  <exec_depend>qtbase5-dev</exec_depend>
+
+  <!-- 导出标记 -->
+  <export>
+    <!-- 如果需要，可以在这里添加其他导出标记 -->
+  </export>
+</package>

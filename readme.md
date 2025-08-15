@@ -1,6 +1,5 @@
 当前版本0.1.3
 优化mysql_test数据，优化mysql_read绘图，增加python可视化工具
-git测试
 
 之前更新：
 0.1.2
@@ -32,3 +31,4 @@ sudo apt-get install qtbase5-dev
 sudo apt-get install libqt5svg5-dev
 sudo apt install gnuplot
 sudo apt-get install libmysqlcppconn-dev
+sudo apt-get install python3-pyqt5.qtwebengine

@@ -1,5 +1,6 @@
 当前版本0.1.3
 优化mysql_test数据，优化mysql_read绘图，增加python可视化工具
+git测试
 
 之前更新：
 0.1.2

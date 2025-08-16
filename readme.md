@@ -31,3 +31,4 @@ sudo apt-get install qtbase5-dev
 sudo apt-get install libqt5svg5-dev
 sudo apt install gnuplot
 sudo apt-get install libmysqlcppconn-dev
+sudo apt-get install python3-pyqt5.qtwebengine

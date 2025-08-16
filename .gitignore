@@ -1,0 +1,5 @@
+build
+devel
+__pycache__
+venv
+.vscode

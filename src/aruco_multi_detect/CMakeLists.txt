@@ -125,6 +125,7 @@ include_directories(
 add_executable(aruco_multi_detector
   src/aruco_multi_detector.cpp
 )
+add_dependencies(aruco_multi_detector ${${PROJECT_NAME}_EXPORTED_TARGETS})
 target_link_libraries(aruco_multi_detector
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
@@ -145,6 +146,7 @@ target_link_libraries(pid_controller
 
 # robots_control
 add_executable(robots_control src/robots_control.cpp)
+add_dependencies(robots_control ${${PROJECT_NAME}_EXPORTED_TARGETS})
 target_link_libraries(robots_control
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}

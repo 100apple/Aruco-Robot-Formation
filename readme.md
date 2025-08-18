@@ -33,3 +33,14 @@ sudo apt-get install libqt5svg5-dev
 sudo apt install gnuplot
 sudo apt-get install libmysqlcppconn-dev
 sudo apt-get install python3-pyqt5.qtwebengine
+sudo apt install \
+    python3 \
+    python3-dev \
+    python3-pyqt5 \
+    python3-pyqt5.qtwebengine \
+    python3-numpy \
+    python3-mysql.connector \
+    python3-plotly \
+    build-essential \
+    libmysqlclient-dev
+pip install plotly-resampler

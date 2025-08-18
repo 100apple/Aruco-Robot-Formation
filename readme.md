@@ -1,6 +1,8 @@
-当前版本0.1.4
-完成python MySQL可视化工具基础功能开发
+当前版本0.1.5
+mysql_test.cpp变为双积分模型加边界层法，现在速度不会抖动
 之前更新：
+0.1.4
+完成python MySQL可视化工具基础功能开发
 0.1.3
 优化mysql_test数据，优化mysql_read绘图，增加python可视化工具
 0.1.2

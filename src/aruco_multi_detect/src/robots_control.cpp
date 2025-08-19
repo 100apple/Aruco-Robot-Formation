@@ -117,7 +117,7 @@ public:
 
         MatrixXd P_star(N, 2);
         P_star << -5, -5, 5, -5, -5, 5, 5, 5;
-        P_star *= 0.02; // Scaling factor
+        P_star *= 0.1; // Scaling factor
 
         MatrixXd D_star(2 * N, N);
         D_star << 0,  10,  0,  10,
@@ -128,7 +128,7 @@ public:
                  -10,-10,  0,   0,
                  -10,  0, -10,  0,
                  -10,-10,  0,   0;
-        D_star *= 0.06; // Scaling factor
+        D_star *= 0.1; // Scaling factor
 
         VectorXd b(2 * N);
         for (int i = 0; i < N; ++i) {
@@ -223,8 +223,8 @@ public:
         // 2. 计算虚拟领导者状态和期望的头部位置 (纳什均衡点)
         double elapsed_time = (current_time - start_time_).toSec();
         Vector2d xi0_k;
-        xi0_k << traj_radius_ * cos(traj_omega_ * elapsed_time),
-                 traj_radius_ * sin(traj_omega_ * elapsed_time);
+        xi0_k << 1.5+traj_radius_ * cos(traj_omega_ * elapsed_time),
+                 2+traj_radius_ * sin(traj_omega_ * elapsed_time);
         Vector2d xi0_dot;
         xi0_dot << -traj_radius_ * traj_omega_ * sin(traj_omega_ * elapsed_time),
                     traj_radius_ * traj_omega_ * cos(traj_omega_ * elapsed_time);

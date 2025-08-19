@@ -12,66 +12,78 @@
 using namespace Eigen;
 using namespace std;
 
-class FiniteTimeController {
+// 用于存储每个机器人的完整状态 [x, y, theta, v, omega]
+struct RobotFullState {
+    VectorXd state = VectorXd::Zero(5);
+    ros::Time timestamp;
+};
+
+
+class AdvancedFormationController {
 private:
     ros::NodeHandle nh_;
     ros::Subscriber aruco_sub_;
     vector<ros::Publisher> cmd_vel_pubs_;
     ros::Publisher virtual_leader_pub_;
     ros::Publisher nash_pub_;
+
+    // --- [新] 控制与模型参数 (来自仿真节点) ---
+    const int N = 4;
+    const double l_i_ = 0.1;  // 机器人中心到头部的距离
+    const double k2 = 1.0;
+    const double k3 = 2.0;
+    const double p = 3.0;
+    const double gamma_ = 2.0 * (p - 1.0) / p;
+    const double boundary_layer_epsilon_ = 0.1; // 平滑边界层厚度
+
+    // --- 编队参数 ---
+    MatrixXd A_;          // 邻接矩阵
+    MatrixXd Q_kron_;     // 克罗内克积形式的Q矩阵
+    VectorXd desired_offsets_d_; // 期望的队形偏移向量
+
+    // --- [修改] 状态存储 ---
+    map<int, RobotFullState> robot_states_; // id -> [x, y, theta, v, w] 和时间戳
+    VectorXd nu_desired_k_minus_1_; // 上一时刻的期望头部速度，用于计算导数
     
-    // 控制参数
-    double k2_, p_, kp_omega_;
-    double formation_scale_;
-    
-    // 编队参数
-    MatrixXd A_;    // 邻接矩阵
-    MatrixXd D_;    // 期望相对位置矩阵 (8x4)
-    MatrixXd P_;    // 虚拟领导者相对位置 (4x2)
-    MatrixXd Q_inv; // (L+I)^-1 * I_2
-    
-    // 状态存储
-    map<int, Vector3d> robot_positions_; // id -> [x, y, theta]
     ros::Time start_time_;
+    ros::Time last_callback_time_; // 上次回调时间，用于计算dt
     bool first_callback_;
+
+    // --- 虚拟领导者轨迹参数 ---
+    const double traj_radius_ = 0.5;
+    const double traj_omega_ = 2 * M_PI / 120.0;
     
-    // 虚拟领导者轨迹参数
-    double traj_radius_;
-    double traj_omega_;
-    
-    // 速度限制
-    const double MAX_LINEAR_VEL = 0.03;
-    const double MAX_ANGULAR_VEL = 0.2;
-    
+    // --- 速度限制 ---
+    const double MAX_LINEAR_VEL = 0.2;  // 适当放宽限制以匹配仿真动态性能
+    const double MAX_ANGULAR_VEL = 0.8;
+
 public:
-    FiniteTimeController() : 
-        k2_(1.0), p_(3.0), kp_omega_(5.0), 
-        traj_radius_(0.5), traj_omega_(2*M_PI/120.0),
-        first_callback_(true) {
+    AdvancedFormationController() : first_callback_(true) {
         
-        // 初始化编队参数 (菱形编队)
+        // 初始化编队和控制参数
         initializeFormationParameters();
         
-        // 创建控制命令发布器
-        for(int i = 1; i <= 4; i++) {
+        // 创建控制命令发布器 (与之前相同)
+        for(int i = 1; i <= N; i++) {
             string topic_name = "/bot" + to_string(i) + "/cmd_vel";
-            cmd_vel_pubs_.push_back(
-                nh_.advertise<geometry_msgs::Twist>(topic_name, 10)
-            );
+            cmd_vel_pubs_.push_back(nh_.advertise<geometry_msgs::Twist>(topic_name, 10));
         }
         
-        // 创建虚拟领导者和纳什均衡发布器
+        // 创建诊断话题发布器 (与之前相同)
         virtual_leader_pub_ = nh_.advertise<aruco_multi_detect::VirtualLeader>("virtual_leader", 10);
         nash_pub_ = nh_.advertise<aruco_multi_detect::NashEquilibrium>("nash_equilibrium", 10);
 
-        // 订阅ArUco标记
-        aruco_sub_ = nh_.subscribe("aruco_markers", 10, 
-                                  &FiniteTimeController::arucoCallback, this);
+        // 订阅ArUco标记 (与之前相同)
+        aruco_sub_ = nh_.subscribe("aruco_markers", 10, &AdvancedFormationController::arucoCallback, this);
         
-        ROS_INFO("Finite Time Controller initialized");
+        nu_desired_k_minus_1_.resize(2 * N);
+        nu_desired_k_minus_1_.setZero();
+        
+        ROS_INFO("Advanced Formation Controller (Realistic Model) initialized.");
+        ROS_INFO("Control params: l_i=%.2f, k2=%.2f, k3=%.2f, epsilon=%.3f", l_i_, k2, k3, boundary_layer_epsilon_);
     }
 
-    ~FiniteTimeController() {
+    ~AdvancedFormationController() {
         stopAllRobots();
     }
 
@@ -85,74 +97,207 @@ public:
         ROS_INFO("Stopping all robots");
     }
 
+    // [新] 使用tanh实现的平滑符号函数，用于消除抖振
+    double smoothSign(double value) {
+        return std::tanh(value / boundary_layer_epsilon_);
+    }
+
     void initializeFormationParameters() {
-        // 邻接矩阵 (菱形拓扑)
-        A_ = MatrixXd::Zero(4, 4);
+        // --- [修改] 编队矩阵初始化 (与仿真节点对齐) ---
+        A_.resize(N, N);
         A_ << 0, 1, 0, 1,
               1, 0, 1, 0,
               0, 1, 0, 1,
               1, 0, 1, 0;
+
+        VectorXd in_degree = A_.colwise().sum();
+        MatrixXd L = MatrixXd(in_degree.asDiagonal()) - A_;
+        VectorXd alpha = VectorXd::Ones(N);
+        MatrixXd Q = L + MatrixXd(alpha.asDiagonal());
+
+        MatrixXd P_star(N, 2);
+        P_star << -5, -5, 5, -5, -5, 5, 5, 5;
+        P_star *= 0.02; // Scaling factor
+
+        MatrixXd D_star(2 * N, N);
+        D_star << 0,  10,  0,  10,
+                  0,   0, 10,  10,
+                 -10,  0, -10,  0,
+                  0,   0, 10,  10,
+                  0,  10,  0,  10,
+                 -10,-10,  0,   0,
+                 -10,  0, -10,  0,
+                 -10,-10,  0,   0;
+        D_star *= 0.06; // Scaling factor
+
+        VectorXd b(2 * N);
+        for (int i = 0; i < N; ++i) {
+            double sum_dx = 0;
+            double sum_dy = 0;
+            for (int j = 0; j < N; ++j) {
+                sum_dx += A_(i, j) * D_star(2 * i, j);
+                sum_dy += A_(i, j) * D_star(2 * i + 1, j);
+            }
+            b(2 * i)     = sum_dx + P_star(i, 0);
+            b(2 * i + 1) = sum_dy + P_star(i, 1);
+        }
+
+        MatrixXd I2 = MatrixXd::Identity(2, 2);
+        Q_kron_.resize(2 * N, 2 * N);
+        for (int i = 0; i < N; ++i) {
+            for (int j = 0; j < N; ++j) {
+                Q_kron_.block(2 * i, 2 * j, 2, 2) = Q(i, j) * I2;
+            }
+        }
         
-        // 期望相对位置矩阵 (8x4, 与Python一致)
-        D_ = MatrixXd::Zero(8, 4);
-        D_ <<  0, 10,  0, 10,
-               0,  0, 10, 10,
-             -10,  0,-10,  0,
-               0,  0, 10, 10,
-               0, 10,  0, 10,
-             -10,-10,  0,  0,
-             -10,  0,-10,  0,
-             -10,-10,  0,  0;
-        D_ *= 0.06; // 缩放
-
-        // 虚拟领导者相对位置 (4x2)
-        P_ = MatrixXd(4, 2);
-        P_ << -5, -5,
-               5, -5,
-              -5,  5,
-               5,  5;
-        P_ *= 0.02;
-
-        // 计算 Q_inv
-        MatrixXd L = A_.rowwise().sum().asDiagonal();
-        L = L - A_;
-        MatrixXd Q = L + MatrixXd::Identity(4, 4);
-        MatrixXd Q_kron = kroneckerProduct(Q, MatrixXd::Identity(2, 2));
-        Q_inv = Q_kron.inverse();
-    }
-
-    void getVirtualLeaderState(double t, Vector2d& pos, Vector2d& vel) {
-        // 圆形轨迹
-        pos << traj_radius_ * cos(traj_omega_ * t),
-               traj_radius_ * sin(traj_omega_ * t);
-        vel << -traj_radius_ * traj_omega_ * sin(traj_omega_ * t),
-                traj_radius_ * traj_omega_ * cos(traj_omega_ * t);
+        // 预先计算期望的队形偏移向量d_hat
+        desired_offsets_d_ = Q_kron_.colPivHouseholderQr().solve(b);
+        ROS_INFO("Formation matrices and desired offsets initialized.");
     }
 
     void arucoCallback(const aruco_multi_detect::ArUcoMarkers::ConstPtr& msg) {
+        ros::Time current_time = ros::Time::now();
         if(first_callback_) {
-            start_time_ = ros::Time::now();
+            start_time_ = current_time;
+            last_callback_time_ = current_time;
             first_callback_ = false;
         }
-        // 更新机器人位置
+
+        double dt = (current_time - last_callback_time_).toSec();
+        if (dt < 1e-4) { // 避免dt过小导致数值不稳定
+            return;
+        }
+        last_callback_time_ = current_time;
+
+        // --- [新] 步骤 0: 状态估计 (v, w) ---
         for(const auto& marker : msg->markers) {
-            if(marker.id >= 1 && marker.id <= 4) {
-                robot_positions_[marker.id] = Vector3d(marker.world_x, marker.world_y, marker.world_z);
+            if(marker.id >= 1 && marker.id <= N) {
+                RobotFullState current_reading;
+                current_reading.state << marker.world_x, marker.world_y, marker.world_z, 0, 0; // world_z 为 yaw
+                current_reading.timestamp = current_time;
+
+                // 如果之前已有该机器人的状态，则进行数值微分估计速度
+                if(robot_states_.count(marker.id)) {
+                    const RobotFullState& last_state = robot_states_.at(marker.id);
+                    double state_dt = (current_reading.timestamp - last_state.timestamp).toSec();
+                    if (state_dt > 1e-4) {
+                        double dx = current_reading.state(0) - last_state.state(0);
+                        double dy = current_reading.state(1) - last_state.state(1);
+                        double d_theta = current_reading.state(2) - last_state.state(2);
+                        // 角度差需要处理万向锁问题
+                        d_theta = atan2(sin(d_theta), cos(d_theta));
+                        
+                        double estimated_v = sqrt(dx*dx + dy*dy) / state_dt;
+                        double estimated_w = d_theta / state_dt;
+
+                        // 将估计出的速度填入当前状态
+                        current_reading.state(3) = estimated_v;
+                        current_reading.state(4) = estimated_w;
+                    }
+                }
+                robot_states_[marker.id] = current_reading;
             }
         }
-        if(robot_positions_.size() < 4) {
+
+        if(robot_states_.size() < N) {
             ROS_WARN_THROTTLE(2.0, "Not all robots detected. Skipping control calculation.");
             return;
         }
-        double elapsed_time = (ros::Time::now() - start_time_).toSec();
         
-        // 1. 获取虚拟领导者状态
-        Vector2d xi0, xi0_dot;
-        getVirtualLeaderState(elapsed_time, xi0, xi0_dot);
+        // ---- 从这里开始，是仿真节点中的核心控制逻辑 ----
         
-        // 发布虚拟领导者状态
+        // 1. 计算头部状态 [xi_h, nu_h]
+        VectorXd xi_head_k(2 * N);
+        VectorXd nu_head_k(2 * N);
+        for (int i = 0; i < N; ++i) {
+            int robot_id = i + 1;
+            const auto& state = robot_states_.at(robot_id).state;
+            double x = state(0), y = state(1), theta = state(2), v = state(3), w = state(4);
+            
+            xi_head_k(2 * i)     = x + l_i_ * cos(theta);
+            xi_head_k(2 * i + 1) = y + l_i_ * sin(theta);
+            nu_head_k(2 * i)     = v * cos(theta) - l_i_ * w * sin(theta);
+            nu_head_k(2 * i + 1) = v * sin(theta) + l_i_ * w * cos(theta);
+        }
+
+        // 2. 计算虚拟领导者状态和期望的头部位置 (纳什均衡点)
+        double elapsed_time = (current_time - start_time_).toSec();
+        Vector2d xi0_k;
+        xi0_k << traj_radius_ * cos(traj_omega_ * elapsed_time),
+                 traj_radius_ * sin(traj_omega_ * elapsed_time);
+        Vector2d xi0_dot;
+        xi0_dot << -traj_radius_ * traj_omega_ * sin(traj_omega_ * elapsed_time),
+                    traj_radius_ * traj_omega_ * cos(traj_omega_ * elapsed_time);
+        
+        VectorXd xi0_replicated = xi0_k.replicate(N, 1);
+        VectorXd xi_star_k = xi0_replicated + desired_offsets_d_; 
+
+        // 3. 计算二阶编队控制律
+        VectorXd Gamma = Q_kron_ * (xi_head_k - xi_star_k);
+
+        VectorXd signed_gamma_term(2 * N);
+        for(int i = 0; i < 2 * N; ++i) {
+            signed_gamma_term(i) = smoothSign(Gamma(i)) * pow(abs(Gamma(i)), 1.0/p);
+        }
+        VectorXd nu_desired_k = -k2 * signed_gamma_term + xi0_dot.replicate(N, 1);
+        
+        VectorXd d_nu_desired = (nu_desired_k - nu_desired_k_minus_1_) / dt;
+        VectorXd velocity_error = nu_head_k - nu_desired_k;
+
+        VectorXd signed_error_term(2 * N);
+        for(int i=0; i<2*N; ++i) {
+            signed_error_term(i) = smoothSign(velocity_error(i)) * pow(abs(velocity_error(i)), gamma_);
+        }
+        VectorXd u_head = d_nu_desired - k3 * signed_error_term;
+        
+        // 更新上一时刻状态，为下一次迭代做准备
+        nu_desired_k_minus_1_ = nu_desired_k;
+
+        // 4. 模型逆变换 & 计算最终的速度指令
+        for (int i = 0; i < N; ++i) {
+            int robot_id = i + 1;
+            const auto& state = robot_states_.at(robot_id).state;
+            double theta = state(2), v = state(3), w = state(4);
+            double ux_h = u_head(2 * i);
+            double uy_h = u_head(2 * i + 1);
+
+            // 模型逆变换矩阵
+            Matrix2d M;
+            M << cos(theta), -l_i_ * sin(theta),
+                 sin(theta),  l_i_ * cos(theta);
+
+            // 补偿项
+            Vector2d compensation;
+            compensation << ux_h + v * w * sin(theta) + l_i_ * w * w * cos(theta),
+                            uy_h - v * w * cos(theta) + l_i_ * w * w * sin(theta);
+            
+            Vector2d u_actual = M.inverse() * compensation;
+            double u_v = u_actual(0); // 线性加速度指令
+            double u_w = u_actual(1); // 角加速度指令
+
+            // 通过积分计算最终的速度指令
+            double v_cmd = v + u_v * dt;
+            double w_cmd = w + u_w * dt;
+
+            // 限幅
+            v_cmd = max(-MAX_LINEAR_VEL, min(MAX_LINEAR_VEL, v_cmd));
+            w_cmd = max(-MAX_ANGULAR_VEL, min(MAX_ANGULAR_VEL, w_cmd));
+
+            // 发布控制指令
+            geometry_msgs::Twist cmd;
+            cmd.linear.x = v_cmd;
+            cmd.angular.z = w_cmd;
+            cmd_vel_pubs_[i].publish(cmd);
+        }
+        
+        // 5. 发布诊断信息
+        publishDiagnostics(current_time, xi0_k, xi0_dot, xi_star_k);
+    }
+    
+    void publishDiagnostics(const ros::Time& stamp, const Vector2d& xi0, const Vector2d& xi0_dot, const VectorXd& xi_star) {
+        // 发布虚拟领导者
         aruco_multi_detect::VirtualLeader leader_msg;
-        leader_msg.header.stamp = ros::Time::now();
+        leader_msg.header.stamp = stamp;
         leader_msg.header.frame_id = "world";
         leader_msg.position.x = xi0.x();
         leader_msg.position.y = xi0.y();
@@ -160,96 +305,21 @@ public:
         leader_msg.velocity.y = xi0_dot.y();
         virtual_leader_pub_.publish(leader_msg);
 
-        // 2. 计算d向量
-        VectorXd d = VectorXd::Zero(8);
-        for(int i = 0; i < 4; ++i) {
-            double sum_x = 0, sum_y = 0;
-            for(int j = 0; j < 4; ++j) {
-                sum_x += A_(i, j) * D_(2*i, j);
-                sum_y += A_(i, j) * D_(2*i+1, j);
-            }
-            d(2*i) = sum_x + P_(i, 0);
-            d(2*i+1) = sum_y + P_(i, 1);
-        }
-
-        // 3. 计算纳什均衡点
-        VectorXd xi0_tiled = xi0.replicate(4, 1);
-        VectorXd xi_star = Q_inv * (d + xi0_tiled);
-
         // 发布纳什均衡点
         aruco_multi_detect::NashEquilibrium nash_msg;
-        nash_msg.header.stamp = ros::Time::now();
+        nash_msg.header.stamp = stamp;
         nash_msg.header.frame_id = "world";
-        for(int i=0; i<4; ++i) {
+        for(int i = 0; i < N; ++i) {
             geometry_msgs::Point p;
             p.x = xi_star(2*i);
             p.y = xi_star(2*i+1);
             nash_msg.nash_points.push_back(p);
         }
         nash_pub_.publish(nash_msg);
-
-        // 4. 计算控制并发布
-        for(int robot_id = 1; robot_id <= 4; robot_id++) {
-            Vector2d xi_i = robot_positions_[robot_id].head<2>();
-            Vector2d Gamma_i = Vector2d::Zero();
-            for(int j = 1; j <= 4; j++) {
-                if(A_(robot_id-1, j-1) > 0) {
-                    Vector2d d_ij(D_(2*(robot_id-1), j-1), D_(2*(robot_id-1)+1, j-1));
-                    Vector2d xi_j = robot_positions_[j].head<2>();
-                    Gamma_i += A_(robot_id-1, j-1) * ((xi_i - xi_j) - d_ij);
-                }
-            }
-            Vector2d p_i = P_.row(robot_id-1);
-            Gamma_i += (xi_i - xi0 - p_i);
-
-            // 控制律
-            Vector2d nu_i;
-            for(int k=0; k<2; ++k) {
-                double x = Gamma_i[k];
-                nu_i[k] = -k2_ * copysign(pow(fabs(x), 1.0/p_), x) + xi0_dot[k];
-            }
-
-            // 差速小车控制
-            geometry_msgs::Twist cmd;
-            convertToRobotCommand(robot_id, nu_i, cmd);
-            cmd_vel_pubs_[robot_id-1].publish(cmd);
-        }
-    }
-
-    void convertToRobotCommand(int robot_id, const Vector2d& global_vel, geometry_msgs::Twist& cmd) {
-        // 获取当前朝向
-        Vector3d state = robot_positions_[robot_id];
-        double theta = state.z(); // world_z为yaw
-        // 期望速度在当前朝向上的投影
-        double v = cos(theta) * global_vel.x() + sin(theta) * global_vel.y();
-        // 期望速度方向
-        double phi = atan2(global_vel.y(), global_vel.x());
-        double error_theta = phi - theta;
-        // 归一化到[-pi, pi]
-        error_theta = atan2(sin(error_theta), cos(error_theta));
-        // 角速度
-        double omega = kp_omega_ * error_theta;
-        // 限幅
-        if(v > MAX_LINEAR_VEL) v = MAX_LINEAR_VEL;
-        if(v < -MAX_LINEAR_VEL) v = -MAX_LINEAR_VEL;
-        if(omega > MAX_ANGULAR_VEL) omega = MAX_ANGULAR_VEL;
-        if(omega < -MAX_ANGULAR_VEL) omega = -MAX_ANGULAR_VEL;
-        cmd.linear.x = v;
-        cmd.angular.z = omega;
-    }
-
-    MatrixXd kroneckerProduct(const MatrixXd& A, const MatrixXd& B) {
-        MatrixXd C(A.rows() * B.rows(), A.cols() * B.cols());
-        for (int i = 0; i < A.rows(); i++) {
-            for (int j = 0; j < A.cols(); j++) {
-                C.block(i * B.rows(), j * B.cols(), B.rows(), B.cols()) = A(i, j) * B;
-            }
-        }
-        return C;
     }
 };
 
-FiniteTimeController* controller_ptr = nullptr;
+AdvancedFormationController* controller_ptr = nullptr;
 
 void sigintHandler(int sig) {
     if(controller_ptr) {
@@ -260,9 +330,10 @@ void sigintHandler(int sig) {
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "robots_control_node", ros::init_options::NoSigintHandler);
-    FiniteTimeController controller;
+    AdvancedFormationController controller;
     controller_ptr = &controller;
     signal(SIGINT, sigintHandler);
     ros::spin();
     return 0;
 }
+

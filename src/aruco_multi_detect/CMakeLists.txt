@@ -165,19 +165,7 @@ target_link_libraries(mysql_test
   ${catkin_LIBRARIES}
 )
 
-# db_test_and_plot
-add_executable(db_test_and_plot src/db_test_and_plot.cpp)
-target_link_libraries(db_test_and_plot
-  ${catkin_LIBRARIES}
-  ${MYSQL_LIBRARIES}
-)
 
-# plot_from_db
-add_executable(plot_from_db src/plot_from_db.cpp)
-target_link_libraries(plot_from_db
-  ${catkin_LIBRARIES}
-  ${MYSQL_LIBRARIES}
-)
 
 # mysql_read (Qt Application)
 add_executable(mysql_read

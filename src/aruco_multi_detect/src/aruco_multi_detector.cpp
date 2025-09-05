@@ -155,8 +155,8 @@ public:
         // n_world · (R * X_cam + tvec) + d_world = 0
         // (R_inv * n_world) · X_cam + (n_world · tvec + d_world) = 0
         cv::Mat R_inv = R_.t(); // 旋转矩阵的逆等于其转置
-        cv::Mat plane_normal_cam = R_inv * plane_normal_;
-        double plane_d_cam = plane_normal_.dot(tvec_) + plane_d_; // 注意这里是n_world · tvec + d_world
+        cv::Mat plane_normal_cam = R_ * plane_normal_;
+        double plane_d_cam = plane_d_ - plane_normal_cam.dot(tvec_);
 
         // 计算交点参数 t = -(n_cam·X0 + d_cam)/(n_cam·v)
         // X0是相机原点 (0,0,0)，所以 n_cam·X0 = 0

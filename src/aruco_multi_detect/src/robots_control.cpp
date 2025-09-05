@@ -53,7 +53,7 @@ private:
 
     // --- 虚拟领导者轨迹参数 ---
     const double traj_radius_ = 0.5;
-    const double traj_omega_ = 2 * M_PI / 120.0;
+    const double traj_omega_ = 2 * M_PI / 60.0;
     
     // --- 速度限制 ---
     const double MAX_LINEAR_VEL = 0.2;
